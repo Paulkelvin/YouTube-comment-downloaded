@@ -10,6 +10,19 @@ const STAGE = {
   READY: 'ready',
 };
 
+const MIME_TYPES = {
+  txt: 'text/plain',
+  csv: 'text/csv',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 export default function Home() {
   const [url, setUrl] = useState('');
   const [format, setFormat] = useState('txt');
@@ -106,8 +119,11 @@ export default function Home() {
 
   function handleDownload() {
     if (!result) return;
-    const mime = result.format === 'csv' ? 'text/csv' : 'text/plain';
-    const blob = new Blob([result.content], { type: `${mime};charset=utf-8` });
+    const mime = MIME_TYPES[result.format] || 'text/plain';
+    const blob =
+      result.encoding === 'base64'
+        ? new Blob([base64ToBytes(result.content)], { type: mime })
+        : new Blob([result.content], { type: `${mime};charset=utf-8` });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = result.filename;
@@ -140,7 +156,7 @@ export default function Home() {
       <div className="mb-8 text-center">
         <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Comment Extractor</h1>
         <p className="mt-2 text-sm text-slate-500">
-          Paste a YouTube video URL and download every comment as a text or CSV file.
+          Paste a YouTube video URL and download every comment — including replies — as a text, CSV, or Excel file.
         </p>
       </div>
 
@@ -200,6 +216,7 @@ export default function Home() {
             >
               <option value="txt">.txt (author: comment)</option>
               <option value="csv">.csv (author, comment, likes, date)</option>
+              <option value="xlsx">.xlsx (structured spreadsheet)</option>
             </select>
 
             {stage !== STAGE.READY && (
@@ -248,12 +265,14 @@ export default function Home() {
                 >
                   Download .{result.format}
                 </button>
-                <button
-                  onClick={handleCopy}
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                >
-                  {copied ? 'Copied!' : 'Copy to clipboard'}
-                </button>
+                {result.encoding !== 'base64' && (
+                  <button
+                    onClick={handleCopy}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                  >
+                    {copied ? 'Copied!' : 'Copy to clipboard'}
+                  </button>
+                )}
                 <button
                   onClick={reset}
                   className="rounded-lg px-4 py-2 text-sm font-medium text-slate-500 transition hover:bg-slate-50"

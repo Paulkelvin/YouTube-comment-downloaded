@@ -1,6 +1,8 @@
 import { extractVideoId, fetchAllComments, MAX_COMMENTS, YouTubeApiError } from '@/lib/youtube';
-import { toTxt, toCsv } from '@/lib/format';
+import { toTxt, toCsv, toXlsx } from '@/lib/format';
 import { checkRateLimit, getClientIp } from '@/lib/rateLimit';
+
+const VALID_FORMATS = new Set(['txt', 'csv', 'xlsx']);
 
 export const runtime = 'nodejs';
 
@@ -21,7 +23,7 @@ export async function POST(request) {
 
   const body = await request.json().catch(() => ({}));
   const videoId = extractVideoId(body.url);
-  const format = body.format === 'csv' ? 'csv' : 'txt';
+  const format = VALID_FORMATS.has(body.format) ? body.format : 'txt';
 
   if (!videoId) {
     return new Response(
@@ -41,13 +43,28 @@ export async function POST(request) {
           send({ type: 'progress', fetched });
         });
 
-        const content = format === 'csv' ? toCsv(comments) : toTxt(comments);
+        // .xlsx is binary, so it's base64-encoded before going through this
+        // text-based NDJSON stream. txt/csv stay as plain text — the
+        // frontend picks the right decode path based on `encoding`.
+        let content;
+        let encoding = 'utf8';
+        if (format === 'csv') {
+          content = toCsv(comments);
+        } else if (format === 'xlsx') {
+          const buffer = await toXlsx(comments);
+          content = buffer.toString('base64');
+          encoding = 'base64';
+        } else {
+          content = toTxt(comments);
+        }
+
         const filename = `${videoId}-comments.${format}`;
 
         send({
           type: 'done',
           filename,
           format,
+          encoding,
           total: comments.length,
           capped,
           maxComments: MAX_COMMENTS,

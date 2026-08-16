@@ -1,28 +1,29 @@
 # Comment Extractor
 
-Export every top-level comment from a YouTube video to a downloadable `.txt` or `.csv` file. Paste a URL, confirm the video, and download.
+Export every comment — top-level and replies — from a YouTube video to a downloadable `.txt`, `.csv`, or `.xlsx` file. Paste a URL, confirm the video, and download.
 
 ## Stack
 
 - Next.js 14 (App Router) + Tailwind CSS
 - Next.js API routes (serverless, deployed on Vercel — no separate backend)
-- YouTube Data API v3 (`videos.list`, `commentThreads.list`)
+- YouTube Data API v3 (`videos.list`, `commentThreads.list`, `comments.list`)
+- ExcelJS for `.xlsx` generation
 - No database — everything is stateless per request
 
 ## How it works
 
 - `app/page.js` — single-page UI: look up a video, confirm it, extract, then download or copy.
 - `app/api/video-info/route.js` — resolves a URL/ID to video metadata (title, thumbnail, comment count) for the confirmation card.
-- `app/api/comments/route.js` — streams newline-delimited JSON progress events while paginating `commentThreads.list`, then a final `done` event with the finished file content. The frontend reads this stream to render a live "Fetched N of ~total" indicator.
-- `lib/youtube.js` — video ID parsing, YouTube API calls, pagination up to `MAX_COMMENTS` (5,000 by default), and error mapping (comments disabled, quota exceeded, video not found, etc).
-- `lib/format.js` — turns comment objects into `.txt` (`Author: comment`) or `.csv` (`author,comment,likeCount,publishedAt`).
+- `app/api/comments/route.js` — streams newline-delimited JSON progress events while paginating comments, then a final `done` event with the finished file content. The frontend reads this stream to render a live "Fetched N of ~total" indicator. `.xlsx` content is base64-encoded (`encoding: 'base64'`) since it's binary; `.txt`/`.csv` are sent as plain text.
+- `lib/youtube.js` — video ID parsing, YouTube API calls, pagination up to `MAX_COMMENTS` (5,000 by default) across top-level comments **and** replies, and error mapping (comments disabled, quota exceeded, video not found, etc).
+- `lib/format.js` — turns comment objects into `.txt` (`Author: comment`, replies indented with `↳`), `.csv` (`author,comment,likeCount,publishedAt,type,replyTo`), or `.xlsx` (same columns as the CSV, as a formatted spreadsheet with a header row and autofilter).
 - `lib/rateLimit.js` — best-effort in-memory rate limiting (10 requests/hour per IP) to guard the API quota.
 
 ### Pagination and quota
 
-`commentThreads.list` returns up to 100 comments per call and costs 1 quota unit per call. `fetchAllComments` in `lib/youtube.js` loops on `nextPageToken` until either YouTube has no more pages or `MAX_COMMENTS` (default 5,000) is reached, whichever comes first — this bounds both response time and quota cost (at most ~50 units per extraction) for videos with very large comment counts. If the cap is hit, the response is flagged `capped: true` and the UI tells the user their file was truncated.
+`commentThreads.list` returns up to 100 top-level comments per call and costs 1 quota unit per call. `fetchAllComments` in `lib/youtube.js` loops on `nextPageToken` until either YouTube has no more pages or `MAX_COMMENTS` (default 5,000, counting top-level comments and replies together) is reached, whichever comes first. If the cap is hit, the response is flagged `capped: true` and the UI tells the user their file was truncated.
 
-Replies are **not** fetched in v1 — only top-level comments, to keep quota cost low. To add replies, call `comments.list` with `parentId=<topLevelCommentId>` for any thread whose `totalReplyCount > 0`, paginating the same way; see the comment above `fetchAllComments` in `lib/youtube.js`.
+Replies are fetched via `comments.list?parentId=<topLevelCommentId>`, one extra call per 100 replies — but only for threads whose `totalReplyCount > 0`, so a video with mostly unreplied comments costs barely more than top-level-only extraction did. Each exported row is tagged `type: 'comment' | 'reply'`, with `parentAuthor` set to the top-level comment's author on replies (null on top-level comments), so all three export formats preserve the thread structure.
 
 ### Error handling
 
@@ -38,7 +39,7 @@ The YouTube API's various failure reasons (`commentsDisabled`, `quotaExceeded`, 
 4. Go to **APIs & Services → Credentials → Create Credentials → API key**.
 5. (Recommended) Restrict the key to the YouTube Data API v3, and optionally to your server's IPs.
 
-The free tier gives you 10,000 quota units/day. Each comment page costs 1 unit, so a full extraction (up to `MAX_COMMENTS`) costs at most ~50 units.
+The free tier gives you 10,000 quota units/day. Each page of top-level comments or replies costs 1 unit (up to 100 comments per page), so a full extraction (up to `MAX_COMMENTS`) costs at most ~50 units for videos with few replies, more for heavily-replied-to videos since each replied-to thread needs its own `comments.list` call(s).
 
 ### 2. Run locally
 
